@@ -1,0 +1,20 @@
+{
+  "name": "agent-office",
+  "version": "0.1.0",
+  "description": "Claude Code / Codex 세션을 아이소메트릭 사무실로 실시간 시각화하는 로컬 대시보드",
+  "type": "module",
+  "bin": {
+    "agent-office": "agent-office.mjs"
+  },
+  "scripts": {
+    "start": "node agent-office.mjs"
+  },
+  "files": [
+    "agent-office.mjs"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["claude-code", "codex", "dashboard", "visualization", "isometric"],
+  "license": "MIT"
+}

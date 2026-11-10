@@ -1,0 +1,6 @@
+# 점검 리포트에는 내 컴퓨터 경로가 들어 있어요
+*-report.json
+check-report.json
+
+node_modules/
+.DS_Store
