@@ -1,13 +1,18 @@
 {
   "name": "agent-office",
   "version": "0.1.0",
+  "productName": "Agent Office",
   "description": "Claude Code / Codex 세션을 아이소메트릭 사무실로 실시간 시각화하는 로컬 대시보드",
   "type": "module",
+  "main": "electron-main.mjs",
   "bin": {
     "agent-office": "agent-office.mjs"
   },
   "scripts": {
-    "start": "node agent-office.mjs"
+    "start": "node agent-office.mjs",
+    "desktop": "electron .",
+    "package:desktop": "electron-forge package",
+    "make": "electron-forge make"
   },
   "files": [
     "agent-office.mjs"
@@ -15,6 +20,25 @@
   "engines": {
     "node": ">=18"
   },
-  "keywords": ["claude-code", "codex", "dashboard", "visualization", "isometric"],
-  "license": "MIT"
+  "config": {
+    "forge": "./forge.config.cjs"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "dashboard",
+    "visualization",
+    "isometric"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@electron-forge/cli": "8.0.1",
+    "@electron-forge/maker-dmg": "8.0.1",
+    "@electron-forge/maker-zip": "8.0.1",
+    "electron": "45.2.3"
+  },
+  "allowScripts": {
+    "fs-xattr@0.3.1": true,
+    "macos-alias@0.2.12": true
+  }
 }

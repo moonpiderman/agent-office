@@ -1,0 +1,78 @@
+name: Release desktop app
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release (for example v0.1.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release-macos:
+    runs-on: macos-15
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify release version
+        run: node -e 'const v=require("./package.json").version;if(process.env.RELEASE_TAG!==`v${v}`)throw new Error(`tag ${process.env.RELEASE_TAG} does not match package version ${v}`)'
+
+      - run: npm ci
+
+      - name: Import Apple signing certificate
+        if: ${{ env.MACOS_CERTIFICATE != '' }}
+        run: |
+          certificate_path="$RUNNER_TEMP/agent-office.p12"
+          keychain_path="$RUNNER_TEMP/agent-office-signing.keychain-db"
+          keychain_password="agent-office-actions"
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" -P "$MACOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path"
+          security list-keychains -d user -s "$keychain_path" login.keychain-db
+
+      - name: Build Apple Silicon artifacts
+        run: npm run make -- --arch=arm64
+
+      - name: Build Intel artifacts
+        run: npm run make -- --arch=x64
+
+      - name: Collect release files
+        run: |
+          mkdir -p release-assets
+          find out/make -type f \( -name '*.dmg' -o -name '*.zip' \) -exec cp {} release-assets/ \;
+          test -n "$(find release-assets -type f -print -quit)"
+          shasum -a 256 release-assets/* > release-assets/SHA256SUMS.txt
+          ls -lh release-assets
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* --generate-notes --title "Agent Office $RELEASE_TAG"
+          fi
