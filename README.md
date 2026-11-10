@@ -50,12 +50,12 @@ npx github:<your-github-id>/agent-office
 | 🌐 정보검색실 | 웹 검색, MCP 도구 | WebSearch, WebFetch, mcp__* | web_search, MCP |
 | 🗒️ 회의실 | 계획, 할 일 (화이트보드에 적힘) | TodoWrite, Task* | update_plan |
 | 🧑‍💻 내 자리 | 질문하러 찾아옴 | AskUserQuestion, 승인 대기(추정) | request_user_input |
-| 🪑 업무 자리 | 서브에이전트 호출, 잠깐 대기 | Agent | |
+| 🪑 업무 자리 | 서브에이전트 호출, 잠깐 대기 | Agent | spawn_agent |
 | ☕ 라운지 | 한동안 쉬는 중 | | |
-| 🛗 엘리베이터 | 서브에이전트 출퇴근 | subagents/*.jsonl | |
+| 🛗 엘리베이터 | 서브에이전트 출퇴근 | subagents/*.jsonl | parent_thread_id가 있는 rollout |
 
 - **층 = 프로젝트**: 작업 폴더(cwd)별로 층이 나뉘어요. 같은 프로젝트면 Claude와 Codex가 같은 층에 출근해요.
-- **서브에이전트**: Explore는 초록 옷에 모자, Plan은 보라 옷에 안경을 쓰고 엘리베이터로 출근해요. 일이 끝나면 Claude 옆으로 와서 보고하고 퇴근해요.
+- **서브에이전트**: Claude와 Codex 모두 부모 세션 아래에 연결돼 엘리베이터로 출근해요. 일이 끝나면 부모 에이전트 옆으로 와서 보고하고 퇴근해요.
 - **도구 실패**: 식은땀을 흘리며 빨간 말풍선을 띄워요.
 - 왼쪽 층별 안내에서 층을 누르면 그 층으로 이동해요. 기본으로는 가장 최근에 일한 층을 따라가요.
 
@@ -64,7 +64,7 @@ npx github:<your-github-id>/agent-office
 ```
 ~/.claude/projects/<project>/<session>.jsonl                  ← Claude Code 세션
 ~/.claude/projects/<project>/<session>/subagents/agent-*.jsonl ← 서브에이전트
-~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl                   ← Codex 세션
+~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl                   ← Codex 세션·서브에이전트
 ```
 
 0.5초마다 변경된 파일의 끝부분만 다시 읽어서 마지막 도구 호출, 결과, 에러, 생각 기록을 보고 상태를 정해요.
