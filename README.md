@@ -3,8 +3,8 @@
 > Claude Code / Codex 세션을 아이소메트릭 사무실 빌딩으로 실시간 시각화하는 로컬 대시보드
 > *A local dashboard that turns your Claude Code & Codex sessions into a live isometric office.*
 
-![Agent Office](docs/screenshot.png)
-<sub>스크린샷은 가짜 세션 데이터로 찍은 화면이에요.</sub>
+![여러 프로젝트 층에서 에이전트가 동시에 작업 중인 Agent Office 데모](docs/demo.gif)
+<sub>가짜 세션 데이터로 녹화한 데모예요.</sub>
 
 터미널에서 에이전트가 뭘 하고 있는지 한눈에 보고 싶어서 만든 사무실이에요.
 에이전트가 파일을 읽으면 자료실에 가서 책을 펴고, 명령을 돌리면 서버실 랙 앞에 서 있어요.
