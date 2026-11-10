@@ -9,6 +9,7 @@ const packagerConfig = {
   asar: true,
   appBundleId: 'io.github.moonpiderman.agent-office',
   appCategoryType: 'public.app-category.developer-tools',
+  icon: 'assets/icon',
 };
 
 if (canSign) packagerConfig.osxSign = {};

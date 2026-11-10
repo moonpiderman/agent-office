@@ -1,6 +1,6 @@
 {
   "name": "agent-office",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "productName": "Agent Office",
   "description": "Claude Code / Codex 세션을 아이소메트릭 사무실로 실시간 시각화하는 로컬 대시보드",
   "type": "module",
@@ -11,6 +11,7 @@
   "scripts": {
     "start": "node agent-office.mjs",
     "desktop": "electron .",
+    "icon:build": "node scripts/build-icon.mjs",
     "package:desktop": "electron-forge package",
     "make": "electron-forge make"
   },
