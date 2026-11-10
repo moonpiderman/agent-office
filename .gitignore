@@ -3,4 +3,6 @@
 check-report.json
 
 node_modules/
+out/
+.artifacts/
 .DS_Store

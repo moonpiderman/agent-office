@@ -29,6 +29,17 @@ npx github:<your-github-id>/agent-office
 - 훅이나 설정은 건드리지 않아요. 세션 기록(jsonl)을 **읽기만** 해요.
 - `127.0.0.1`에서만 열려서 다른 사람은 접속할 수 없어요.
 
+### 데스크톱 앱
+
+Electron 앱으로도 실행할 수 있어요.
+
+```bash
+npm install
+npm run desktop
+```
+
+macOS 배포 파일은 Electron Forge로 DMG와 ZIP을 만들며, 버전 태그를 푸시하면 GitHub Release에 자동으로 올라갑니다. 자세한 절차와 Apple 서명 설정은 [데스크톱 앱 배포](docs/RELEASING.md)를 참고하세요.
+
 ### 옵션
 
 | 옵션 | 설명 | 기본값 |

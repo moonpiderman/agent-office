@@ -12,6 +12,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
@@ -576,12 +577,34 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   res.end(PAGE);
 });
-server.on('error', (e) => { console.error(e.code === 'EADDRINUSE' ? `포트 ${PORT}가 이미 사용 중이에요. --port 다른번호 로 실행해 보세요.` : e); process.exit(1); });
-server.listen(PORT, '127.0.0.1', () => {
-  console.log(`\n  🏢 Agent Office  →  http://localhost:${PORT}`);
-  if (USE_CLAUDE) console.log(`     Claude Code : ${ROOT}${fs.existsSync(ROOT) ? '' : '  (없음)'}`);
-  if (USE_CODEX) console.log(`     Codex       : ${CODEX_ROOT}${fs.existsSync(CODEX_ROOT) ? '' : '  (없음)'}`);
-  console.log(`     ${LIVE_MIN}분 안에 기록이 있으면 출근 · 최근 ${FLOOR_DAYS}일 프로젝트를 층으로 표시 (Ctrl+C 종료)\n`);
+
+export function startAgentOfficeServer({ port = PORT, quiet = false } = {}) {
+  if (server.listening) {
+    const address = server.address(); const activePort = typeof address === 'object' && address ? address.port : port;
+    return Promise.resolve({ server, port: activePort, url: `http://127.0.0.1:${activePort}` });
+  }
+  return new Promise((resolve, reject) => {
+    const onError = (error) => { server.off('listening', onListen); reject(error); };
+    const onListen = () => {
+      server.off('error', onError);
+      const address = server.address(); const activePort = typeof address === 'object' && address ? address.port : port;
+      if (!quiet) {
+        console.log(`\n  🏢 Agent Office  →  http://localhost:${activePort}`);
+        if (USE_CLAUDE) console.log(`     Claude Code : ${ROOT}${fs.existsSync(ROOT) ? '' : '  (없음)'}`);
+        if (USE_CODEX) console.log(`     Codex       : ${CODEX_ROOT}${fs.existsSync(CODEX_ROOT) ? '' : '  (없음)'}`);
+        console.log(`     ${LIVE_MIN}분 안에 기록이 있으면 출근 · 최근 ${FLOOR_DAYS}일 프로젝트를 층으로 표시 (Ctrl+C 종료)\n`);
+      }
+      resolve({ server, port: activePort, url: `http://127.0.0.1:${activePort}` });
+    };
+    server.once('error', onError); server.once('listening', onListen); server.listen(port, '127.0.0.1');
+  });
+}
+
+const directEntry = (() => { try { return fs.realpathSync(process.argv[1]); } catch { return ''; } })();
+const directRun = directEntry === fileURLToPath(import.meta.url);
+if (directRun) startAgentOfficeServer().catch((e) => {
+  console.error(e.code === 'EADDRINUSE' ? `포트 ${PORT}가 이미 사용 중이에요. --port 다른번호 로 실행해 보세요.` : e);
+  process.exitCode = 1;
 });
 
 // ═════════════════════════════ 화면 ═════════════════════════════
