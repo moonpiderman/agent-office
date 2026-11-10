@@ -13,7 +13,7 @@ if (out.exists) {
   for (const { f } of files) bump(out.pathPatterns, path.relative(ROOT, f).replace(/\d/g, '9').replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, 'UUID').replace(/rollout-.*\.jsonl$/, 'rollout-*.jsonl'));
   out.live30min = files.filter(x => Date.now() - x.st.mtimeMs < 30 * 60e3).length;
   for (const { f, st } of files.sort((a, b) => b.st.mtimeMs - a.st.mtimeMs).slice(0, 5)) {
-    const r = { minutesAgo: Math.round((Date.now() - st.mtimeMs) / 60e3), sizeKB: Math.round(st.size / 1024), wrapped: 0, bare: 0, lineTypes: {}, payloadTypes: {}, topKeys: {}, payloadKeys: {}, toolNames: {}, shellFirstWords: {}, reasoning: { items: 0, withSummary: 0, eventAgentReasoning: 0 }, hasCwd: false, hasGit: false, version: null, model: null, originator: null, approvalLike: {}, errorLike: 0, hasCallIds: false };
+    const r = { minutesAgo: Math.round((Date.now() - st.mtimeMs) / 60e3), sizeKB: Math.round(st.size / 1024), wrapped: 0, bare: 0, lineTypes: {}, payloadTypes: {}, topKeys: {}, payloadKeys: {}, toolNames: {}, shellFirstWords: {}, reasoning: { items: 0, withSummary: 0, eventAgentReasoning: 0 }, hasCwd: false, hasGit: false, version: null, model: null, originator: null, isSubagent: false, hasParentThreadId: false, threadSource: null, subagentType: null, approvalLike: {}, errorLike: 0, hasCallIds: false };
     for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
       if (!line.trim()) continue; let o; try { o = JSON.parse(line); } catch { continue; }
       for (const k of Object.keys(o)) bump(r.topKeys, k);
@@ -23,6 +23,12 @@ if (out.exists) {
       for (const k of Object.keys(p)) bump(r.payloadKeys, k);
       if (p.cwd) r.hasCwd = true; if (p.git) r.hasGit = true;
       if (p.cli_version) r.version = p.cli_version; if (p.model) r.model = p.model; if (p.originator) r.originator = p.originator;
+      if (p.parent_thread_id) { r.hasParentThreadId = true; r.isSubagent = true; }
+      if (p.thread_source) r.threadSource = p.thread_source;
+      if (p.source?.subagent) {
+        r.isSubagent = true; const sub = p.source.subagent;
+        r.subagentType = typeof sub === 'string' ? sub : sub.task_name || sub.agent_name || sub.name || sub.type || sub.role || sub.other || Object.keys(sub)[0] || null;
+      }
       if (p.call_id) r.hasCallIds = true;
       if (/function_call|custom_tool_call|local_shell_call|web_search_call|tool_call/.test(p.type || '') && !/output/.test(p.type)) {
         const name = p.name || p.type; bump(r.toolNames, name);

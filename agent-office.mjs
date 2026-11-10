@@ -212,6 +212,7 @@ function codexCmd(raw) {
 function codexCat(name, cmd) {
   if (/request_user_input|ask_user|user_input/i.test(name)) return 'boss';
   if (name === 'update_plan') return 'meeting';
+  if (/^(spawn_agent|send_message|followup_task|wait_agent|list_agents|interrupt_agent)$/.test(name)) return 'desk';
   if (/apply_patch/.test(name) || /\*\*\* Begin Patch|^\s*apply_patch/m.test(cmd)) return 'dev';
   if (/web_search|web\.run|search_query/i.test(name)) return 'web';
   if (name === 'view_image') return 'library';
@@ -230,6 +231,7 @@ function codexDetail(name, cmd, raw) {
   const files = [...cmd.matchAll(/\*\*\* (?:Update|Add|Delete) File: (.+)/g)].map((x) => base(x[1].trim()));
   if (files.length) return cut(files.join(', '), 60);
   if (name === 'update_plan') { try { const a = JSON.parse(raw); const t = (a.plan || []).find((x) => x.status === 'in_progress'); return cut(t?.step || a.explanation || '계획 정리', 50); } catch { return '계획 정리'; } }
+  if (name === 'spawn_agent') { const a = jsonObj(raw); return cut(a?.task_name || a?.message || '서브에이전트 호출', 50); }
   return cut(cmd.split('\n').find((l) => l.trim()) || name, 60);
 }
 const codexErr = (out) => {
@@ -239,11 +241,54 @@ const codexErr = (out) => {
 };
 const outText = (out) => { let s = typeof out === 'string' ? out : JSON.stringify(out ?? ''); try { const j = JSON.parse(s); if (typeof j?.output === 'string') s = j.output; } catch {} return cut(s.split('\n').filter((l) => l.trim()).slice(-1)[0] || s, 80); };
 
+const codexFileId = (file) => {
+  const m = base(file).match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i);
+  return m?.[1] || base(file).replace(/\.jsonl$/, '').replace(/^rollout-[\d-T:]+-?/, '');
+};
+function codexSubType(source, threadSource = '') {
+  const sub = source && typeof source === 'object' ? source.subagent : null;
+  if (typeof sub === 'string') return sub;
+  if (sub && typeof sub === 'object') {
+    for (const k of ['task_name', 'agent_name', 'name', 'type', 'role', 'other']) if (typeof sub[k] === 'string' && sub[k]) return sub[k];
+    const v = Object.values(sub).find((x) => typeof x === 'string' && x);
+    if (v) return v;
+    const k = Object.keys(sub)[0]; if (k) return k;
+  }
+  return threadSource ? threadSource.replace(/_(review|spawn)$/, '') : '';
+}
+const jsonObj = (raw) => {
+  if (raw && typeof raw === 'object') return raw;
+  if (typeof raw !== 'string') return null;
+  try { const v = JSON.parse(raw); return v && typeof v === 'object' ? v : null; } catch { return null; }
+};
+
+const codexHeadMetaCache = new Map();
+function codexHeadMeta(file) {
+  if (codexHeadMetaCache.has(file)) return codexHeadMetaCache.get(file);
+  let meta = null;
+  try {
+    for (const line of readHead(file).split('\n')) {
+      if (!line.includes('session_meta')) continue;
+      const o = JSON.parse(line); if (o.type !== 'session_meta') continue;
+      const p = o.payload && typeof o.payload === 'object' ? o.payload : o;
+      meta = {
+        id: p.id || p.session_id || codexFileId(file), parentId: p.parent_thread_id || '',
+        cwd: p.cwd || '', branch: p.git?.branch || '', threadSource: p.thread_source || '',
+        subType: codexSubType(p.source, p.thread_source || ''), isSub: !!(p.parent_thread_id || p.source?.subagent),
+      };
+      break;
+    }
+  } catch {}
+  meta ||= { id: codexFileId(file), parentId: '', cwd: '', branch: '', threadSource: '', subType: '', isSub: false };
+  codexHeadMetaCache.set(file, meta);
+  return meta;
+}
+
 function parseCodex(file, lines, mtimeMs) {
   const s = {
-    id: base(file).replace(/\.jsonl$/, '').replace(/^rollout-[\d-T]+-?/, '') || base(file), file, mtimeMs, agent: 'codex',
+    id: codexFileId(file), file, mtimeMs, agent: 'codex', parentId: '', isSub: false, subType: '', threadSource: '',
     cwd: '', branch: '', title: '', model: '', firstPrompt: '', firstHead: '', lastPrompt: '', lastText: '', events: [], tools: 0, prompts: 0,
-    todos: [], thinkingText: '', thinkingMs: 0, lastError: null, lastTs: 0, pending: new Map(), tasks: new Map(), lastKind: null, turnActive: false,
+    todos: [], thinkingText: '', thinkingMs: 0, lastError: null, lastTs: 0, pending: new Map(), tasks: new Map(), spawned: new Map(), lastKind: null, turnActive: false,
   };
   const push = (e) => { s.events.push(e); if (s.events.length > 50) s.events.shift(); };
   for (const line of lines) {
@@ -252,7 +297,13 @@ function parseCodex(file, lines, mtimeMs) {
     const p = o.payload && typeof o.payload === 'object' ? o.payload : o;
     const kind = o.payload ? o.type : (p.type === 'message' || /call/.test(p.type || '') || p.type === 'reasoning' ? 'response_item' : o.type);
     const ts = o.timestamp ? Date.parse(o.timestamp) : 0;
-    if (kind === 'session_meta') { if (p.cwd) s.cwd = p.cwd; if (p.git?.branch) s.branch = p.git.branch; continue; }
+    if (kind === 'session_meta') {
+      if (p.id || p.session_id) s.id = p.id || p.session_id;
+      if (p.cwd) s.cwd = p.cwd; if (p.git?.branch) s.branch = p.git.branch;
+      s.parentId = p.parent_thread_id || ''; s.threadSource = p.thread_source || '';
+      s.subType = codexSubType(p.source, s.threadSource); s.isSub = !!(s.parentId || p.source?.subagent);
+      continue;
+    }
     if (kind === 'turn_context') { if (p.cwd) s.cwd = p.cwd; if (p.model) s.model = p.model; continue; }
     if (kind === 'event_msg') {
       if (p.type === 'task_started') { s.turnActive = true; s.lastKind = 'user'; if (ts) s.lastTs = ts; }
@@ -281,18 +332,27 @@ function parseCodex(file, lines, mtimeMs) {
     } else if (/_call$/.test(t)) {
       const name = p.name || t.replace(/_call$/, '');
       const raw = p.arguments ?? p.input ?? p.action ?? '';
+      const arg = jsonObj(raw);
       const cmd = t === 'local_shell_call' ? codexCmd({ command: p.action?.command }) : t === 'web_search_call' ? String(p.action?.query || '') : codexCmd(raw);
       const cat = t === 'web_search_call' ? 'web' : codexCat(name, cmd);
       const detail = t === 'web_search_call' ? cut(cmd || '웹 검색', 50) : codexDetail(name, cmd, typeof raw === 'string' ? raw : JSON.stringify(raw));
       s.tools++; push({ ts, kind: 'tool', tool: name, text: detail });
-      if (t !== 'web_search_call') s.pending.set(p.call_id || p.id || String(ts), { id: p.call_id, name, detail, ts, cat });
+      const callId = p.call_id || p.id || String(ts);
+      if (t !== 'web_search_call') s.pending.set(callId, { id: callId, name, detail, ts, cat });
       s.lastKind = 'tool';
       if (name === 'update_plan') { try { const a = JSON.parse(raw); if (Array.isArray(a.plan)) s.todos = a.plan.map((x) => ({ text: cut(x.step, 60), status: x.status })); } catch {} }
+      if (name === 'spawn_agent') s.tasks.set(callId, { type: arg?.task_name || 'general-purpose', desc: cut(arg?.message || arg?.prompt || arg?.task_name || '', 80) });
     } else if (/_call_output$/.test(t)) {
       const pend = s.pending.get(p.call_id); s.pending.delete(p.call_id); s.lastKind = 'tool_result';
       if (pend && codexErr(p.output)) { const txt = outText(p.output); s.lastError = { ts, tool: pend.name, text: txt }; push({ ts, kind: 'err', tool: pend.name, text: txt }); }
+      const task = s.tasks.get(p.call_id); const out = jsonObj(p.output);
+      const childId = out?.agent_id || out?.thread_id || out?.id;
+      if (task && childId) s.spawned.set(String(childId), task);
     }
   }
+  const meta = codexHeadMeta(file);
+  s.id = meta.id || s.id; s.parentId = meta.parentId || s.parentId; s.isSub ||= meta.isSub;
+  s.subType ||= meta.subType; s.threadSource ||= meta.threadSource; s.cwd ||= meta.cwd; s.branch ||= meta.branch;
   if (!s.lastTs) s.lastTs = mtimeMs;
   return s;
 }
@@ -356,6 +416,21 @@ function scanCodex(now, full) {
   if (!full) for (const [f, info] of codexFiles) if (now - info.mtimeMs < LIVE_MIN * 60e3) { const st = statSafe(f); if (st) { info.mtimeMs = st.mtimeMs; info.size = st.size; } }
 }
 
+function publishCodexSub(s, c, now, task) {
+  const finished = !s.turnActive && s.pending.size === 0 && s.lastKind === 'text';
+  if (finished && now - s.mtimeMs > 30e3) return null;
+  if (!finished && now - s.mtimeMs > 10 * 60e3) return null;
+  const fallbackDesc = s.subType === 'guardian' ? '승인 검토' : s.firstPrompt || s.threadSource || '서브에이전트';
+  return {
+    id: s.id, type: task?.type || s.subType || 'general-purpose',
+    desc: cut(task?.desc || fallbackDesc, 50),
+    state: finished ? 'done' : c.state === 'idle' || c.state === 'sleep' ? 'working' : c.state,
+    tool: c.tool, cat: c.cat === 'boss' ? 'desk' : c.cat, detail: c.detail,
+    done: finished, doneTs: finished ? s.lastTs : 0, lastError: s.lastError,
+    thinkingText: s.thinkingText, events: s.events.slice(-25), lastTs: s.lastTs, model: s.model,
+  };
+}
+
 function snapshot() {
   const now = Date.now();
   const full = now - lastFull > 5000;
@@ -394,19 +469,60 @@ function snapshot() {
 
   if (USE_CODEX) {
     scanCodex(now, full);
+    const fileById = new Map();
     for (const [f, info] of codexFiles) {
       if (now - info.mtimeMs > FLOOR_DAYS * 864e5) continue;
-      let s = null;
-      if (now - info.mtimeMs <= LIVE_MIN * 60e3) { s = getParsed(f, info, 'codex'); if (s?.cwd) info.cwd = s.cwd; }
-      if (!info.cwd) info.cwd = headCwd(f) || '';
-      if (s && !s.cwd) s.cwd = info.cwd;
+      const meta = codexHeadMeta(f); fileById.set(meta.id || codexFileId(f), [f, info]);
+      if (!info.cwd) info.cwd = meta.cwd || headCwd(f) || '';
       const fl = floorOf(info.cwd, 'codex');
       fl.lastActive = Math.max(fl.lastActive, info.mtimeMs); fl.agents.add('codex');
-      if (s && s.events.length) fl.sessions.push(publish(s, classify(s, now), now, null));
+    }
+
+    const active = new Map();
+    const loadCodex = (f, info) => {
+      const s = getParsed(f, info, 'codex'); if (!s) return null;
+      if (s.cwd) info.cwd = s.cwd; else s.cwd = info.cwd || '';
+      active.set(s.id, { s, info, f }); return s;
+    };
+    for (const [f, info] of codexFiles) {
+      if (now - info.mtimeMs > LIVE_MIN * 60e3 || now - info.mtimeMs > FLOOR_DAYS * 864e5) continue;
+      loadCodex(f, info);
+    }
+    // 활동 중인 자식만 새로 기록되고 부모 파일은 잠든 경우에도 부모까지 불러온다.
+    for (const item of [...active.values()]) {
+      let parentId = item.s.parentId; const seen = new Set();
+      while (parentId && !active.has(parentId) && !seen.has(parentId)) {
+        seen.add(parentId); const parentFile = fileById.get(parentId); if (!parentFile) break;
+        const ps = loadCodex(parentFile[0], parentFile[1]); if (!ps) break; parentId = ps.parentId;
+      }
+    }
+    const children = new Map();
+    for (const item of active.values()) if (item.s.parentId && active.has(item.s.parentId)) {
+      const list = children.get(item.s.parentId) || []; list.push(item); children.set(item.s.parentId, list);
+    }
+    const descendants = (id, seen = new Set()) => {
+      if (seen.has(id)) return []; seen.add(id);
+      const direct = children.get(id) || [];
+      return direct.flatMap((x) => [x, ...descendants(x.s.id, seen)]);
+    };
+    for (const item of active.values()) {
+      const { s, info } = item;
+      if (s.parentId && active.has(s.parentId)) continue;
+      const subs = descendants(s.id).map((child) => {
+        const parent = active.get(child.s.parentId)?.s;
+        return publishCodexSub(child.s, classify(child.s, now), now, parent?.spawned.get(child.s.id));
+      }).filter(Boolean);
+      if (now - info.mtimeMs > LIVE_MIN * 60e3 && !subs.length) continue;
+      if (!s.events.length && !subs.length) continue;
+      const pub = publish(s, classify(s, now), now, null); pub.subs = subs;
+      const fl = floorOf(s.cwd || info.cwd, 'codex'); fl.sessions.push(pub);
     }
   }
 
-  for (const k of parsed.keys()) { const st = parsed.get(k); if (now - st.mtimeMs > (LIVE_MIN + 5) * 60e3) parsed.delete(k); }
+  for (const k of parsed.keys()) {
+    const st = parsed.get(k); const keep = k.startsWith(CODEX_ROOT) ? (FLOOR_DAYS + 1) * 864e5 : (LIVE_MIN + 5) * 60e3;
+    if (now - st.mtimeMs > keep) parsed.delete(k);
+  }
   const list = [...floors.values()].map((f) => ({ ...f, agents: [...f.agents] })).sort((a, b) => a.name.localeCompare(b.name));
   const older = [...olderKeys].filter((k) => !floors.has(k)).length;
   return {
@@ -442,7 +558,7 @@ function publish(s, c, now, dir) {
     });
   }
   let subType = '';
-  if (c.tool === 'Agent' || c.tool === 'Task') { const p = [...s.pending.values()].pop(); subType = s.tasks.get(p?.id)?.type || ''; }
+  if (c.tool === 'Agent' || c.tool === 'Task' || c.tool === 'spawn_agent') { const p = [...s.pending.values()].pop(); subType = s.tasks.get(p?.id)?.type || ''; }
   return {
     id: s.id, agent: s.agent, title: s.title || s.firstPrompt, firstPrompt: s.firstPrompt, lastPrompt: s.lastPrompt, lastText: s.lastText,
     cwd: s.cwd, branch: s.branch, model: s.model, prompts: s.prompts, tools: s.tools, ...c, subType,
@@ -596,12 +712,13 @@ function hhmm(t){const d=new Date(t);return String(d.getHours()).padStart(2,'0')
 const TOOL_KO={Bash:'명령 실행',BashOutput:'출력 확인',Read:'읽는 중',Edit:'수정 중',MultiEdit:'수정 중',Write:'작성 중',NotebookEdit:'노트북 수정',
  Grep:'검색 중',Glob:'파일 찾기',WebFetch:'웹 읽기',WebSearch:'웹 검색',Agent:'호출 중',Task:'호출 중',TodoWrite:'할 일 정리',TaskCreate:'할 일 추가',
  TaskUpdate:'할 일 갱신',AskUserQuestion:'질문',ExitPlanMode:'계획 승인 요청',Skill:'스킬 펼침',ToolSearch:'도구 찾기',Artifact:'페이지 게시',Monitor:'모니터링',
- exec:'명령',shell:'명령',exec_command:'명령',js:'JS 실행',wait:'기다리는 중',apply_patch:'패치 적용',update_plan:'계획 정리',request_user_input_async:'질문',request_user_input:'질문',view_image:'이미지 보기',web_search:'웹 검색'};
+ exec:'명령',shell:'명령',exec_command:'명령',js:'JS 실행',wait:'기다리는 중',apply_patch:'패치 적용',update_plan:'계획 정리',spawn_agent:'서브에이전트 호출',send_message:'메시지 전달',followup_task:'후속 작업 전달',wait_agent:'서브에이전트 대기',request_user_input_async:'질문',request_user_input:'질문',view_image:'이미지 보기',web_search:'웹 검색'};
 const CAT_ICON={library:'📖',dev:'⌨️',server:'🗄️',web:'🌐',meeting:'🗒️',desk:'📞',boss:'🙋',lounge:'☕'};
 const ST_KO={working:'작업 중',thinking:'생각 중',waiting:'확인 필요',idle:'대기',sleep:'졸고 있음',done:'보고 완료'};
 const ST_C={working:'var(--working)',thinking:'var(--thinking)',waiting:'var(--waiting)',idle:'var(--idle)',sleep:'var(--idle)',done:'var(--done)'};
-const AGENT={claude:{c:'#d97757',n:'Claude'},codex:{c:'#10a37f',n:'Codex'},Explore:{c:'#2f9e5b',n:'Explore'},Plan:{c:'#8b5cf6',n:'Plan'},'general-purpose':{c:'#3b82f6',n:'범용'}};
+const AGENT={claude:{c:'#d97757',n:'Claude'},codex:{c:'#10a37f',n:'Codex'},Explore:{c:'#2f9e5b',n:'Explore'},Plan:{c:'#8b5cf6',n:'Plan'},guardian:{c:'#7c3aed',n:'Guardian'},'general-purpose':{c:'#3b82f6',n:'범용'}};
 const agentOf=t=>AGENT[t]||{c:'#64748b',n:t||'에이전트'};
+const sessionLive=s=>s.state!=='sleep'||(s.subs||[]).some(x=>x.state!=='sleep'&&x.state!=='done');
 function toolName(t){if(!t)return '';if(t.indexOf('mcp__')===0)return t.split('__')[1]+' 도구';return TOOL_KO[t]||t}
 
 // ───────── 아이소메트릭 월드 ─────────
@@ -797,7 +914,7 @@ function bubbleOf(c){const d=c.data||{};const now=performance.now();
  if(c.errOn)return {cls:'err',t:'💦 '+toolName(d.lastError.tool)+' 실패 · '+cutS(d.lastError.text,40)};
  if(c.phase==='leaving')return {cls:'say',t:'👋 퇴근합니다!'};
  if(c.phase==='report')return {cls:'say',t:'📄 결과 보고하러 가는 중'};
- if(d.state==='working'){if(d.tool==='Agent'||d.tool==='Task')return {cls:'',t:'📞 '+agentOf(d.subType).n+' 호출 · '+(d.detail||'')};return {cls:'',t:(CAT_ICON[d.cat]||'🛠')+' '+toolName(d.tool)+(d.detail?' · '+d.detail:'')}}
+ if(d.state==='working'){if(d.tool==='Agent'||d.tool==='Task'||d.tool==='spawn_agent')return {cls:'',t:'📞 '+agentOf(d.subType).n+' 호출 · '+(d.detail||'')};return {cls:'',t:(CAT_ICON[d.cat]||'🛠')+' '+toolName(d.tool)+(d.detail?' · '+d.detail:'')}}
  if(d.state==='waiting'){if(d.tool==='AskUserQuestion'||/request_user_input/.test(d.tool))return {cls:'wait',t:'❓ 물어볼 게 있어요 · '+(d.detail||'')};if(d.tool==='ExitPlanMode')return {cls:'wait',t:'📋 계획 확인해 주세요'};return {cls:'wait',t:'✋ 승인 기다리는 중? · '+toolName(d.tool)+' '+(d.detail||'')}}
  if(d.state==='thinking')return {cls:'cloud',t:d.thinkingText?'💭 '+d.thinkingText:'💭 고민 중…'};
  if(d.state==='sleep')return {cls:'mute',t:'💤'};
@@ -826,7 +943,7 @@ function roomFor(c){const d=c.data;if(!d)return 'desk';
 function apply(){
  const floors=DATA.floors;floors.forEach((f,i)=>f.no=i+1);
  // 층 선택
- const liveFloors=floors.filter(f=>f.sessions.some(s=>s.state!=='sleep'));
+ const liveFloors=floors.filter(f=>f.sessions.some(sessionLive));
  if($('follow').checked||!curFloor||!floors.find(f=>f.key===curFloor)){
   let best=null,bt=0;for(const f of floors)for(const s of f.sessions){const t=Math.max(s.lastTs,s.mtimeMs);if(t>bt){bt=t;best=f}}
   if(!best)best=floors[floors.length-1];if(best&&best.key!==curFloor)switchFloor(best.key,!firstLoad)}
@@ -866,7 +983,7 @@ function switchFloor(key,anim){curFloor=key;floorJustSwitched=true;for(const c o
 // ───────── 패널 ─────────
 function renderPanels(){
  const now=serverNow();const floors=DATA.floors;const f=curFloorData();
- $('floors').innerHTML=floors.slice().reverse().map(fl=>{const live=fl.sessions.some(s=>s.state!=='sleep');const sel=fl.key===curFloor;
+ $('floors').innerHTML=floors.slice().reverse().map(fl=>{const live=fl.sessions.some(sessionLive);const sel=fl.key===curFloor;
   const n=fl.sessions.length,subs=fl.sessions.reduce((a,s)=>a+s.subs.length,0);
   const tags=(fl.agents||[]).map(a=>'<b style="color:'+AGENT[a].c+'">'+(a==='codex'?'&gt;_':'✳')+'</b>').join(' ');
   const sub=tags+' '+(n?(n+'명 근무'+(subs?' · 서브 '+subs:'')):'불 꺼짐 · '+ago(now-fl.lastActive)+' 전');
