@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+
+jobs:
+  validate-macos:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run check
+
+      - name: Verify generated icon assets
+        run: |
+          npm run icon:build
+          # ICNS embeds compressed PNGs whose bytes can vary across zlib versions.
+          # The source pixels are verified here; packaging below validates the ICNS.
+          git diff --exit-code -- assets/icon.png
+
+      - name: Package desktop app
+        run: npm run package:desktop -- --arch=arm64

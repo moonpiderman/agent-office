@@ -38,7 +38,7 @@ npm install
 npm run desktop
 ```
 
-macOS 배포 파일은 Electron Forge로 DMG와 ZIP을 만들며, 버전 태그를 푸시하면 GitHub Release에 자동으로 올라갑니다. 자세한 절차와 Apple 서명 설정은 [데스크톱 앱 배포](docs/RELEASING.md)를 참고하세요.
+macOS 배포 파일은 Electron Forge로 DMG와 ZIP을 만들며, 버전 태그를 푸시하면 검증된 GitHub Release 초안이 자동으로 만들어집니다. 자세한 버전 정책과 Apple 서명 설정은 [데스크톱 앱 배포](docs/RELEASING.md)를 참고하세요.
 
 ### 옵션
 
