@@ -28,16 +28,46 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
 
       - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
 
-      - name: Verify release version
-        run: node -e 'const v=require("./package.json").version;if(process.env.RELEASE_TAG!==`v${v}`)throw new Error(`tag ${process.env.RELEASE_TAG} does not match package version ${v}`)'
+      - name: Verify release metadata
+        shell: bash
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          expected_tag="v${version}"
+
+          if [[ "$RELEASE_TAG" != "$expected_tag" ]]; then
+            echo "Tag $RELEASE_TAG does not match package version $version" >&2
+            exit 1
+          fi
+
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(beta|rc)\.[1-9][0-9]*)?$ ]]; then
+            echo "Tag must look like v1.2.3, v1.2.3-beta.1, or v1.2.3-rc.1" >&2
+            exit 1
+          fi
+
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "Release tag must point to a commit contained in origin/main" >&2
+            exit 1
+          fi
+
+          if [[ "$version" == *-* ]]; then
+            is_prerelease=true
+          else
+            is_prerelease=false
+          fi
+
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+          echo "IS_PRERELEASE=$is_prerelease" >> "$GITHUB_ENV"
 
       - run: npm ci
+
+      - run: npm run check
 
       - name: Import Apple signing certificate
         if: ${{ env.MACOS_CERTIFICATE != '' }}
@@ -60,19 +90,39 @@ jobs:
         run: npm run make -- --arch=x64
 
       - name: Collect release files
+        shell: bash
         run: |
           mkdir -p release-assets
-          find out/make -type f \( -name '*.dmg' -o -name '*.zip' \) -exec cp {} release-assets/ \;
-          test -n "$(find release-assets -type f -print -quit)"
-          shasum -a 256 release-assets/* > release-assets/SHA256SUMS.txt
+
+          for arch in arm64 x64; do
+            dmg="out/make/dmg/${arch}/Agent Office-${RELEASE_VERSION}-${arch}.dmg"
+            zip="out/make/zip/darwin/${arch}/Agent Office-darwin-${arch}-${RELEASE_VERSION}.zip"
+            test -f "$dmg"
+            test -f "$zip"
+            cp "$dmg" "release-assets/Agent-Office-${RELEASE_VERSION}-macos-${arch}.dmg"
+            cp "$zip" "release-assets/Agent-Office-${RELEASE_VERSION}-macos-${arch}.zip"
+          done
+
+          (cd release-assets && shasum -a 256 Agent-Office-* > SHA256SUMS.txt)
           ls -lh release-assets
 
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" release-assets/* --clobber
           else
-            gh release create "$RELEASE_TAG" release-assets/* --generate-notes --title "Agent Office $RELEASE_TAG"
+            args=(
+              release create "$RELEASE_TAG" release-assets/*
+              --draft
+              --generate-notes
+              --title "Agent Office $RELEASE_TAG"
+              --verify-tag
+            )
+            if [[ "$IS_PRERELEASE" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            gh "${args[@]}"
           fi

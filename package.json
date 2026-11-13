@@ -11,6 +11,7 @@
   "scripts": {
     "start": "node agent-office.mjs",
     "desktop": "electron .",
+    "check": "node --check agent-office.mjs && node --check electron-main.mjs && node --check forge.config.cjs && node --check scripts/build-icon.mjs",
     "icon:build": "node scripts/build-icon.mjs",
     "package:desktop": "electron-forge package",
     "make": "electron-forge make"
